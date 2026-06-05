@@ -12,6 +12,3 @@ data/raw/
 .Rproj.user/
 .RDataTmp*
 .RData
-
-# Output do Quarto
-docs/
