@@ -10,6 +10,8 @@ data/raw/
 .Rhistory
 .RData
 .Rproj.user/
+.RDataTmp*
+.RData
 
 # Output do Quarto
 docs/
