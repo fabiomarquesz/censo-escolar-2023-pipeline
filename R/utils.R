@@ -5,7 +5,7 @@ library(mongolite)
 library(dotenv)
 
 #Carrega variáveis do .env
-load_dot_env(".env")
+load_dot_env(here::here(".env"))
 
 #Função de conexão com MongoDB
 mongo_connect <- function(collection) {

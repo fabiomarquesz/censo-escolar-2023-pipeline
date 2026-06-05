@@ -1,0 +1,301 @@
+---
+title: "Censo Escolar 2023"
+subtitle: "Análise da Educação Básica Brasileira"
+author: "Fabio Marques Batista Silva"
+date: today
+lang: pt
+format:
+  html:
+    toc: true
+    toc-title: "Sumário"
+    toc-depth: 3
+    theme: cosmo
+    code-fold: true
+    code-summary: "Ver código"
+    fig-width: 10
+    fig-height: 6
+    embed-resources: true
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+```{r setup}
+
+# Caminho relativo à raiz do projeto
+source(here::here("R/utils.R"))
+
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+
+# Paleta de cores
+cores_rede <- c(
+  "Federal"   = "#2C3E50",
+  "Estadual"  = "#2980B9",
+  "Municipal" = "#27AE60",
+  "Privada"   = "#E67E22"
+)
+
+cores_regiao <- c(
+  "Norte"     = "#1ABC9C",
+  "Nordeste"  = "#E74C3C",
+  "Centro-Oeste" = "#F39C12",
+  "Sudeste"   = "#2980B9",
+  "Sul"       = "#8E44AD"
+)
+```
+
+## Sobre o projeto
+
+Este relatório apresenta uma análise exploratória dos microdados do **Censo Escolar 2023**, 
+disponibilizados pelo INEP. O pipeline de dados foi construído em R com MongoDB, 
+seguindo a arquitetura Medallion (Bronze → Silver → Gold).
+
+**Perguntas que este relatório responde:**
+
+1. Como se distribuem as escolas por UF e dependência administrativa?
+2. Qual o acesso à internet banda larga por estado?
+3. Como cada rede oferta as etapas de ensino?
+4. Quais UFs têm maior proporção de escolas rurais?
+5. Existe desigualdade de infraestrutura entre escolas urbanas e rurais?
+
+---
+
+## 1. Distribuição de escolas por UF e rede
+
+```{r kpi1}
+con <- mongo_connect("gold_uf_dependencia")
+df_uf <- con$find()
+
+# Top 15 UFs
+top_ufs <- df_uf |>
+  group_by(SG_UF, NO_REGIAO) |>
+  summarise(total = sum(total_escolas), .groups = "drop") |>
+  slice_max(total, n = 15)
+
+ggplot(top_ufs, aes(x = reorder(SG_UF, total), y = total, fill = NO_REGIAO)) +
+  geom_col() +
+  geom_text(aes(label = scales::comma(total, big.mark = ".")),
+            hjust = -0.1, size = 3.2) +
+  scale_fill_manual(values = cores_regiao) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
+  coord_flip() +
+  labs(
+    title    = "Top 15 UFs por número de escolas de educação básica",
+    subtitle = "Censo Escolar 2023 — escolas em atividade",
+    x        = NULL,
+    y        = "Total de escolas",
+    fill     = "Região",
+    caption  = "Fonte: INEP — Censo Escolar 2023"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "bottom")
+```
+
+```{r kpi1b}
+# Composição por dependência — top 10 UFs
+top10 <- df_uf |>
+  group_by(SG_UF) |>
+  summarise(total = sum(total_escolas), .groups = "drop") |>
+  slice_max(total, n = 10) |>
+  pull(SG_UF)
+
+df_uf |>
+  filter(SG_UF %in% top10) |>
+  ggplot(aes(x = reorder(SG_UF, total_escolas),
+             y = total_escolas, fill = TP_DEPENDENCIA)) +
+  geom_col(position = "fill") +
+  scale_fill_manual(values = cores_rede) +
+  scale_y_continuous(labels = scales::percent) +
+  coord_flip() +
+  labs(
+    title    = "Composição da rede escolar por dependência administrativa",
+    subtitle = "Top 10 UFs — proporção por tipo de rede",
+    x        = NULL,
+    y        = "Proporção",
+    fill     = "Dependência",
+    caption  = "Fonte: INEP — Censo Escolar 2023"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "bottom")
+```
+
+---
+
+## 2. Acesso à internet banda larga por UF
+
+```{r kpi2}
+con2 <- mongo_connect("gold_internet_uf")
+df_internet <- con2$find()
+
+ggplot(df_internet,
+       aes(x = reorder(SG_UF, pct_banda_larga),
+           y = pct_banda_larga, fill = NO_REGIAO)) +
+  geom_col() +
+  geom_hline(yintercept = mean(df_internet$pct_banda_larga),
+             linetype = "dashed", color = "gray40") +
+  annotate("text", x = 5, y = mean(df_internet$pct_banda_larga) + 2,
+           label = paste0("Média: ",
+                          round(mean(df_internet$pct_banda_larga), 1), "%"),
+           size = 3.5, color = "gray40") +
+  scale_fill_manual(values = cores_regiao) +
+  scale_y_continuous(limits = c(0, 105)) +
+  coord_flip() +
+  labs(
+    title    = "Percentual de escolas com internet banda larga por UF",
+    subtitle = "Linha tracejada indica a média nacional",
+    x        = NULL,
+    y        = "% de escolas com banda larga",
+    fill     = "Região",
+    caption  = "Fonte: INEP — Censo Escolar 2023"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "bottom")
+```
+
+---
+
+## 3. Oferta de etapas de ensino por rede
+
+```{r kpi3}
+con3 <- mongo_connect("gold_etapas_rede")
+df_etapas <- con3$find()
+
+df_etapas_long <- df_etapas |>
+  select(TP_DEPENDENCIA, total_escolas,
+         infantil_cre, infantil_pre,
+         fund_anos_ini, fund_anos_fin,
+         ensino_medio, eja, profissional) |>
+  pivot_longer(-c(TP_DEPENDENCIA, total_escolas),
+               names_to = "etapa", values_to = "escolas") |>
+  mutate(
+    pct   = round(escolas / total_escolas * 100, 1),
+    etapa = recode(etapa,
+      "infantil_cre"  = "Inf. Creche",
+      "infantil_pre"  = "Inf. Pré-escola",
+      "fund_anos_ini" = "Fund. Anos Iniciais",
+      "fund_anos_fin" = "Fund. Anos Finais",
+      "ensino_medio"  = "Ensino Médio",
+      "eja"           = "EJA",
+      "profissional"  = "Profissional"
+    )
+  )
+
+ggplot(df_etapas_long,
+       aes(x = etapa, y = pct, fill = TP_DEPENDENCIA)) +
+  geom_col(position = "dodge") +
+  scale_fill_manual(values = cores_rede) +
+  scale_y_continuous(limits = c(0, 110),
+                     labels = scales::label_percent(scale = 1)) +
+  labs(
+    title    = "Oferta de etapas de ensino por dependência administrativa",
+    subtitle = "% de escolas que ofertam cada etapa, por rede",
+    x        = NULL,
+    y        = "% de escolas",
+    fill     = "Dependência",
+    caption  = "Fonte: INEP — Censo Escolar 2023"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.text.x  = element_text(angle = 30, hjust = 1),
+    legend.position = "bottom"
+  )
+```
+
+---
+
+## 4. Escolas rurais por UF
+
+```{r kpi4}
+con4 <- mongo_connect("gold_rural_uf")
+df_rural <- con4$find()
+
+ggplot(df_rural,
+       aes(x = reorder(SG_UF, pct_rural),
+           y = pct_rural, fill = NO_REGIAO)) +
+  geom_col() +
+  geom_hline(yintercept = mean(df_rural$pct_rural),
+             linetype = "dashed", color = "gray40") +
+  scale_fill_manual(values = cores_regiao) +
+  scale_y_continuous(limits = c(0, 85)) +
+  coord_flip() +
+  labs(
+    title    = "Proporção de escolas em área rural por UF",
+    subtitle = "Linha tracejada indica a média nacional",
+    x        = NULL,
+    y        = "% de escolas rurais",
+    fill     = "Região",
+    caption  = "Fonte: INEP — Censo Escolar 2023"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "bottom")
+```
+
+---
+
+## 5. Desigualdade de infraestrutura: urbano vs rural
+
+```{r kpi5}
+con5 <- mongo_connect("gold_infra_localizacao")
+df_infra <- con5$find()
+
+df_infra_long <- df_infra |>
+  select(TP_LOCALIZACAO, starts_with("pct_")) |>
+  pivot_longer(-TP_LOCALIZACAO,
+               names_to = "indicador", values_to = "pct") |>
+  mutate(indicador = recode(indicador,
+    "pct_biblioteca"   = "Biblioteca",
+    "pct_lab_info"     = "Lab. Informática",
+    "pct_lab_ciencias" = "Lab. Ciências",
+    "pct_quadra"       = "Quadra Esportiva",
+    "pct_internet"     = "Internet",
+    "pct_banda_larga"  = "Banda Larga"
+  ))
+
+ggplot(df_infra_long,
+       aes(x = indicador, y = pct, fill = TP_LOCALIZACAO)) +
+  geom_col(position = "dodge") +
+  geom_text(aes(label = paste0(pct, "%")),
+            position = position_dodge(width = 0.9),
+            vjust = -0.4, size = 3.2) +
+  scale_fill_manual(values = c("Rural" = "#E74C3C", "Urbana" = "#2980B9")) +
+  scale_y_continuous(limits = c(0, 110),
+                     labels = scales::label_percent(scale = 1)) +
+  labs(
+    title    = "Infraestrutura escolar: urbana vs rural",
+    subtitle = "% de escolas com cada recurso de infraestrutura",
+    x        = NULL,
+    y        = "% de escolas",
+    fill     = "Localização",
+    caption  = "Fonte: INEP — Censo Escolar 2023"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.text.x  = element_text(angle = 20, hjust = 1),
+    legend.position = "bottom"
+  )
+```
+
+---
+
+## Conclusões
+
+- **São Paulo** concentra a maior rede escolar do país com **`r scales::comma(30580)`** escolas
+- O **Distrito Federal** lidera em conectividade com **97.8%** das escolas com banda larga
+- Escolas **rurais** têm acesso à banda larga **35 pontos percentuais** abaixo das urbanas
+- A rede **municipal** é responsável pela maior parte da oferta de ensino fundamental
+- Estados do **Nordeste** apresentam as maiores proporções de escolas em área rural
+
+---
+
+## Sobre o pipeline
+
+| Camada | Coleção MongoDB | Registros |
+|--------|----------------|-----------|
+| Bronze | `bronze_escolas` | 217.625 |
+| Silver | `silver_escolas` | 180.230 |
+| Gold   | 5 coleções agregadas | — |
+
+**Tecnologias:** R 4.6 · MongoDB 7 · Quarto · ggplot2 · mongolite

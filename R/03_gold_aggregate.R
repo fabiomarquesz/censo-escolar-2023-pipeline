@@ -102,13 +102,19 @@ colecoes_gold <- lapply(colecoes_gold, function(df) {
 log_msg("Salvando coleções Gold no MongoDB...")
 
 colecoes_gold <- list(
-  gold_uf_dependencia = gold_uf_dependencia,
-  gold_internet_uf = gold_internet_uf,
-  gold_etapas_rede = gold_etapas_rede,
-  gold_rural_uf = gold_rural_uf,
+  gold_uf_dependencia    = gold_uf_dependencia,
+  gold_internet_uf       = gold_internet_uf,
+  gold_etapas_rede       = as.data.frame(gold_etapas_rede),
+  gold_rural_uf          = gold_rural_uf,
   gold_infra_localizacao = gold_infra_localizacao
 )
-  
+
+colecoes_gold <- lapply(colecoes_gold, function(df) {
+  df <- as.data.frame(df)
+  df |> mutate(across(where(is.numeric), as.numeric),
+               across(where(is.character), as.character))
+})
+
 for (nome in names(colecoes_gold)) {
   con <- mongo_connect(nome)
   con$remove("{}")
